@@ -3,7 +3,7 @@ from cs231n.layers import *
 from cs231n.fast_layers import *
 
 
-def affine_relu_forward(x, w, b):
+def affine_relu_forward(x, w, b, use_dropout, dropout_param):
     """
     Convenience layer that perorms an affine transform followed by a ReLU
 
@@ -15,17 +15,22 @@ def affine_relu_forward(x, w, b):
     - out: Output from the ReLU
     - cache: Object to give to the backward pass
     """
+    drop_cache = None
     a, fc_cache = affine_forward(x, w, b)
     out, relu_cache = relu_forward(a)
-    cache = (fc_cache, relu_cache)
+    if(use_dropout):
+        out, drop_cache = dropout_forward(out, dropout_param)
+    cache = (fc_cache, relu_cache, drop_cache)
     return out, cache
 
 
-def affine_relu_backward(dout, cache):
+def affine_relu_backward(dout, cache, use_dropout):
     """
     Backward pass for the affine-relu convenience layer
     """
-    fc_cache, relu_cache = cache
+    fc_cache, relu_cache, drop_cache = cache
+    if(use_dropout):
+        dout = dropout_backward(dout, drop_cache)
     da = relu_backward(dout, relu_cache)
     dx, dw, db = affine_backward(da, fc_cache)
     return dx, dw, db

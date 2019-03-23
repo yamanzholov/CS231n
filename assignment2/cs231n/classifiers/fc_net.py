@@ -6,6 +6,41 @@ from cs231n.layers import *
 from cs231n.layer_utils import *
 
 
+
+def affine_batch_relu_forward(x, w, b, gamma, beta, bn_param, use_dropout, dropout_param):
+    """
+    Convenience layer that perorms an affine transform followed by a ReLU
+
+    Inputs:
+    - x: Input to the affine layer
+    - w, b: Weights for the affine layer
+
+    Returns a tuple of:
+    - out: Output from the ReLU
+    - cache: Object to give to the backward pass
+    """
+    drop_cache = None
+    a, fc_cache = affine_forward(x, w, b)
+    a, batch_cache = batchnorm_forward(a, gamma, beta, bn_param)
+    out, relu_cache = relu_forward(a)
+    if(use_dropout):
+        out, drop_cache = dropout_forward(out, dropout_param)
+    cache = (fc_cache, batch_cache, relu_cache, drop_cache)
+    return out, cache
+
+
+def affine_batch_relu_backward(dout, cache, use_dropout):
+    """
+    Backward pass for the affine-relu convenience layer
+    """
+    fc_cache, batch_cache, relu_cache, drop_cache = cache
+    if(use_dropout):
+        dout = dropout_backward(dout, drop_cache)
+    da = relu_backward(dout, relu_cache)
+    da, dgamma, dbeta = batchnorm_backward_alt(da, batch_cache)
+    dx, dw, db = affine_backward(da, fc_cache)
+    return dx, dw, db, dgamma, dbeta
+
 class TwoLayerNet(object):
     """
     A two-layer fully-connected neural network with ReLU nonlinearity and
@@ -186,6 +221,11 @@ class FullyConnectedNet(object):
             self.params["b" + str(i + 1)] = np.zeros((hidden_dims[i],))
         self.params["W" + str(self.num_layers)] = np.random.normal(scale = weight_scale, size = (hidden_dims[-1], num_classes))
         self.params["b" + str(self.num_layers)] = np.zeros((num_classes,))
+        if(self.normalization == "batchnorm"):
+            self.params["gamma1"], self.params["beta1"] = np.ones((hidden_dims[0],)), np.zeros((hidden_dims[0],))
+            for i in range(1, self.num_layers - 1):
+                self.params["gamma" + str(i + 1)], self.params["beta" + str(i + 1)] = np.ones((hidden_dims[i],)), np.zeros((hidden_dims[i],))
+            
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -213,8 +253,8 @@ class FullyConnectedNet(object):
         # Cast all parameters to the correct datatype
         for k, v in self.params.items():
             self.params[k] = v.astype(dtype)
-
-
+    
+    
     def loss(self, X, y=None):
         """
         Compute loss and gradient for the fully-connected net.
@@ -248,11 +288,18 @@ class FullyConnectedNet(object):
         activations = {}
         sum_for_loss = 0
         activations["a0"] = X
-        for i in range(self.num_layers - 1):
-            activations["a" + str(i + 1)], caches[str(i + 1)] = affine_relu_forward(activations["a" + str(i)], self.params["W" + str(i + 1)], self.params["b" + str(i + 1)])
-            sum_for_loss += np.sum(self.params["W" + str(i + 1)] ** 2)
-        scores, caches[str(self.num_layers)] = affine_forward(activations["a" + str(self.num_layers - 1)], self.params["W" + str(self.num_layers)], self.params["b" + str(self.num_layers)])
-        sum_for_loss += np.sum(self.params["W" + str(self.num_layers)] ** 2)
+        if(self.normalization == "batchnorm"):
+            for i in range(self.num_layers - 1):
+                activations["a" + str(i + 1)], caches[str(i + 1)] = affine_batch_relu_forward(activations["a" + str(i)], self.params["W" + str(i + 1)], self.params["b" + str(i + 1)], self.params["gamma" + str(i + 1)], self.params["beta" + str(i + 1)], self.bn_params[i])
+                sum_for_loss += np.sum(self.params["W" + str(i + 1)] ** 2)
+            scores, caches[str(self.num_layers)] = affine_forward(activations["a" + str(self.num_layers - 1)], self.params["W" + str(self.num_layers)], self.params["b" + str(self.num_layers)])
+            sum_for_loss += np.sum(self.params["W" + str(self.num_layers)] ** 2)
+        else:
+            for i in range(self.num_layers - 1):
+                activations["a" + str(i + 1)], caches[str(i + 1)] = affine_relu_forward(activations["a" + str(i)], self.params["W" + str(i + 1)], self.params["b" + str(i + 1)], self.use_dropout, self.dropout_param)
+                sum_for_loss += np.sum(self.params["W" + str(i + 1)] ** 2)
+            scores, caches[str(self.num_layers)] = affine_forward(activations["a" + str(self.num_layers - 1)], self.params["W" + str(self.num_layers)], self.params["b" + str(self.num_layers)])
+            sum_for_loss += np.sum(self.params["W" + str(self.num_layers)] ** 2)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -281,9 +328,14 @@ class FullyConnectedNet(object):
         upstream_gradients["da" + str(self.num_layers - 1)], grads["W" + str(self.num_layers)], grads["b" + str(self.num_layers)] = affine_backward(upstream_gradients["da" + str(self.num_layers)], caches[str(self.num_layers)])
         grads["W" + str(self.num_layers)] += self.reg * self.params["W" + str(self.num_layers)]
         
-        for i in range(self.num_layers - 1, 0, -1):
-            upstream_gradients["da" + str(i - 1)], grads["W" + str(i)], grads["b" + str(i)] = affine_relu_backward(upstream_gradients["da" + str(i)], caches[str(i)])
-            grads["W" + str(i)] += self.reg * self.params["W" + str(i)]
+        if(self.normalization == "batchnorm"):
+            for i in range(self.num_layers - 1, 0, -1):
+                upstream_gradients["da" + str(i - 1)], grads["W" + str(i)], grads["b" + str(i)], grads["gamma" + str(i)], grads["beta" + str(i)] = affine_batch_relu_backward(upstream_gradients["da" + str(i)], caches[str(i)], self.use_dropout)
+                grads["W" + str(i)] += self.reg * self.params["W" + str(i)]
+        else:
+            for i in range(self.num_layers - 1, 0, -1):
+                upstream_gradients["da" + str(i - 1)], grads["W" + str(i)], grads["b" + str(i)] = affine_relu_backward(upstream_gradients["da" + str(i)], caches[str(i)], self.use_dropout)
+                grads["W" + str(i)] += self.reg * self.params["W" + str(i)]
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
